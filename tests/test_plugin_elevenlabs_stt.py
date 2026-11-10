@@ -23,6 +23,7 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIStatusError,
     LanguageCode,
     stt,
@@ -927,6 +928,28 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+async def test_recognize_bounds_the_request_by_conn_options() -> None:
+    # without its own timeout the request falls back to aiohttp's 5 minute default,
+    # so a stalled request would hold the user's turn and delay the retry
+    posted: dict[str, Any] = {}
+
+    class _FakeSession:
+        def post(self, url: str, **kwargs: Any) -> Any:
+            posted.update(kwargs)
+            raise aiohttp.ClientConnectionError("connection refused")
+
+    batch_stt = elevenlabs_stt.STT(api_key="test-key", http_session=cast(Any, _FakeSession()))
+    with pytest.raises(APIConnectionError):
+        await batch_stt.recognize(
+            [_frame(100)], conn_options=APIConnectOptions(max_retry=0, timeout=3.0)
+        )
+
+    timeout = posted.get("timeout")
+    assert isinstance(timeout, aiohttp.ClientTimeout)
+    assert timeout.sock_connect == 3.0
+    assert timeout.total == 30
 
 
 @pytest.mark.no_concurrent
