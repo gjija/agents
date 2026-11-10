@@ -702,6 +702,29 @@ async def test_interruption_options() -> None:
     check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
 
 
+async def test_agent_interruption_options_override_session() -> None:
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(5.0)  # playout starts at 3.5s
+    actions.add_user_speech(5.0, 6.0, "Stop!")
+    actions.add_user_speech(6.5, 7.5, "ok, stop!", stt_delay=0.0)
+    # min_words is set on the agent only: it should interrupt at 7.5s after stt,
+    # playback position is 4.0s
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent(turn_handling={"interruption": {"min_words": 3}})
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+    check_timestamp(playback_finished_events[0].playback_position, 4.0, speed_factor=speed)
+
+
 async def test_interruption_by_text_input() -> None:
     speed = 1
     actions = FakeActions()

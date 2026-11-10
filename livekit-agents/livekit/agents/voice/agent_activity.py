@@ -111,6 +111,7 @@ from .tool_executor import (
 )
 from .turn import (
     EndpointingOptions,
+    InterruptionOptions,
     PreemptiveGenerationOptions,
     TurnDetectionMode,
     _resolve_endpointing,
@@ -694,6 +695,12 @@ class AgentActivity(RecognitionHooks):
         agent_preemptive = self._agent._turn_handling.get("preemptive_generation", {})
         session_preemptive = self._session.options.preemptive_generation
         return PreemptiveGenerationOptions(**{**session_preemptive, **agent_preemptive})
+
+    @property
+    def interruption_opts(self) -> InterruptionOptions:
+        # session is always fully resolved; agent-level keys override it
+        agent_interruption = self._agent._turn_handling.get("interruption", {})
+        return InterruptionOptions(**{**self._session.options.interruption, **agent_interruption})
 
     @property
     def min_endpointing_delay(self) -> float:
@@ -1715,7 +1722,7 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.done()
             and not self._current_speech.interrupted
             and not self._current_speech.allow_interruptions
-            and self._session.options.interruption["discard_audio_if_uninterruptible"]
+            and self.interruption_opts["discard_audio_if_uninterruptible"]
         )
 
         should_discard: bool = aec_warmup_active or uninterruptible_speech_active
@@ -2402,7 +2409,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detected = False
             return
 
-        interruption_options = self._session.options.interruption
+        interruption_options = self.interruption_opts
         if (
             self.stt is not None
             and interruption_options["min_words"] > 0
@@ -2533,7 +2540,7 @@ class AgentActivity(RecognitionHooks):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
-        active_speech = ev.speech_duration >= self._session.options.interruption["min_duration"]
+        active_speech = ev.speech_duration >= self.interruption_opts["min_duration"]
         if active_speech and (
             self._turn_detection != "stt"
             or not self._stt_eos_received
@@ -2606,8 +2613,7 @@ class AgentActivity(RecognitionHooks):
             if (
                 speaking is False
                 and self._paused_speech
-                and (timeout := self._session.options.interruption["false_interruption_timeout"])
-                is not None
+                and (timeout := self.interruption_opts["false_interruption_timeout"]) is not None
             ):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
@@ -2638,8 +2644,7 @@ class AgentActivity(RecognitionHooks):
             if (
                 speaking is False
                 and self._paused_speech
-                and (timeout := self._session.options.interruption["false_interruption_timeout"])
-                is not None
+                and (timeout := self.interruption_opts["false_interruption_timeout"]) is not None
             ):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
@@ -2768,9 +2773,9 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
-            and self._session.options.interruption["min_words"] > 0
+            and self.interruption_opts["min_words"] > 0
             and len(split_words(info.new_transcript, split_character=True))
-            < self._session.options.interruption["min_words"]
+            < self.interruption_opts["min_words"]
         ):
             self._cancel_preemptive_generation()
             return False
@@ -2888,7 +2893,7 @@ class AgentActivity(RecognitionHooks):
                 # (realtime models add their own transcript, the STT copy would duplicate it)
                 if (
                     info.new_transcript != ""
-                    and not self._session.options.interruption["discard_audio_if_uninterruptible"]
+                    and not self.interruption_opts["discard_audio_if_uninterruptible"]
                     and not isinstance(self.llm, llm.RealtimeModel)
                 ):
                     self._agent._chat_ctx.items.append(user_message)
@@ -5082,7 +5087,7 @@ class AgentActivity(RecognitionHooks):
             # the framework never interrupts on the caller here, so no interruption can be false
             return False
 
-        interruption_options = self._session.options.interruption
+        interruption_options = self.interruption_opts
         return bool(
             interruption_options["resume_false_interruption"]
             and interruption_options["false_interruption_timeout"] is not None
@@ -5157,7 +5162,7 @@ class AgentActivity(RecognitionHooks):
 
             resumed = False
             if (
-                self._session.options.interruption["resume_false_interruption"]
+                self.interruption_opts["resume_false_interruption"]
                 and (audio_output := self._session.output.audio)
                 and audio_output.can_pause
                 and not self._paused_speech.handle.done()
@@ -5245,10 +5250,7 @@ class AgentActivity(RecognitionHooks):
                 await self._paused_speech.handle._wait_for_generation()
         self._paused_speech = None
 
-        if (
-            self._session.options.interruption["resume_false_interruption"]
-            and self._session.output.audio
-        ):
+        if self.interruption_opts["resume_false_interruption"] and self._session.output.audio:
             self._session.output.audio.resume()
 
     def _disable_vad_interruption_soon(self) -> None:
