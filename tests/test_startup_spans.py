@@ -9,6 +9,7 @@ events on ``agent_session``."""
 from __future__ import annotations
 
 import asyncio
+import functools
 import io
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
@@ -337,6 +338,37 @@ def test_shutdown_callback_wrapper_keeps_the_user_name() -> None:
 
     assert wrapped.__module__ == flush_crm.__module__
     assert not _is_framework_callback(wrapped)
+
+
+async def test_shutdown_callback_takes_partials_and_callable_objects() -> None:
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=_info(),
+        room=_mock_room(),
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    calls: list[tuple[str, ...]] = []
+
+    async def save(name: str, reason: str) -> None:
+        calls.append((name, reason))
+
+    async def close(name: str) -> None:
+        calls.append((name,))
+
+    class Uploader:
+        async def __call__(self) -> None:
+            calls.append(("upload",))
+
+    ctx.add_shutdown_callback(functools.partial(save, "save"))
+    ctx.add_shutdown_callback(functools.partial(close, "close"))
+    ctx.add_shutdown_callback(Uploader())
+
+    for callback in ctx._shutdown_callbacks:
+        await callback("room deleted")
+
+    assert calls == [("save", "room deleted"), ("close",), ("upload",)]
 
 
 # -- SIP join keys --

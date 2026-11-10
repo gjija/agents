@@ -650,8 +650,16 @@ class JobContext:
         Add a callback to be called when the job is shutting down.
         Optionally the callback can take a single argument, the shutdown reason.
         """
-        min_args_num = 2 if inspect.ismethod(callback) else 1
-        if callback.__code__.co_argcount >= min_args_num:
+        if hasattr(callback, "__code__"):
+            min_args_num = 2 if inspect.ismethod(callback) else 1
+            takes_reason = callback.__code__.co_argcount >= min_args_num
+        else:
+            # functools.partial objects and callable objects have no __code__
+            params = inspect.signature(callback).parameters.values()
+            takes_reason = any(
+                p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) for p in params
+            )
+        if takes_reason:
             self._shutdown_callbacks.append(callback)  # type: ignore
         else:
 
